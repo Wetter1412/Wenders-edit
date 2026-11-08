@@ -7,54 +7,1177 @@ on:
 
 jobs:
   build-android-apk:
-    # Cố định phiên bản máy chủ Ubuntu 24.04 để tắt thông báo chuyển đổi Ubuntu 26
     runs-on: ubuntu-24.04
 
     steps:
-      - name: 1. Tải mã nguồn
-        uses: actions/checkout@v4
+      - name: 1. Tải mã nguồn (Bản v6 chuẩn Node.js 24)
+        uses: actions/checkout@v6
 
-      - name: 2. Cài đặt Node.js 24 (Thay thế bản 20 đã lỗi thời)
-        uses: actions/setup-node@v4
+      - name: 2. Cài đặt Node.js 24 (Bản v6 không cảnh báo)
+        uses: actions/setup-node@v6
         with:
           node-version: '24'
+          package-manager-cache: false
 
-      - name: 3. Cài đặt Java JDK 17 (Đã nâng lên bản v5)
+      - name: 3. Cài đặt Java JDK 17 (Bản v5)
         uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: 4. Cấu hình Android NDK r26d & Build-Tools có sẵn trên máy chủ
+      - name: 4. Kiểm tra và tự động tạo bù các file nếu bị thiếu (Chống lỗi 254)
+        run: |
+          # Nếu người dùng lỡ đặt file trong thư mục con w-edit/, tự động đưa ra ngoài cùng
+          if [ -f "w-edit/package.json" ] && [ ! -f "package.json" ]; then
+            cp -rn w-edit/* .
+          fi
+
+          mkdir -p src src-tauri/src src-tauri/capabilities src-tauri/icons
+
+          # 1. Tự tạo package.json nếu chưa có
+          if [ ! -f "package.json" ]; then
+            cat << 'EOF' > package.json
+          {
+            "name": "w-edit-ui",
+            "private": true,
+            "version": "0.1.0",
+            "type": "module",
+            "scripts": {
+              "dev": "vite",
+              "build": "tsc && vite build",
+              "preview": "vite preview"
+            },
+            "dependencies": {
+              "@codemirror/autocomplete": "^6.18.0",
+              "@codemirror/commands": "^6.6.0",
+              "@codemirror/lang-cpp": "^6.0.2",
+              "@codemirror/lang-css": "^6.2.1",
+              "@codemirror/lang-html": "^6.4.9",
+              "@codemirror/lang-javascript": "^6.2.2",
+              "@codemirror/lang-json": "^6.0.1",
+              "@codemirror/lang-markdown": "^6.2.5",
+              "@codemirror/lang-python": "^6.1.6",
+              "@codemirror/lang-rust": "^6.0.1",
+              "@codemirror/language": "^6.10.2",
+              "@codemirror/state": "^6.4.1",
+              "@codemirror/theme-one-dark": "^6.1.2",
+              "@codemirror/view": "^6.28.4",
+              "@tauri-apps/api": "^2.0.0",
+              "@tauri-apps/plugin-dialog": "^2.0.0",
+              "@tauri-apps/plugin-fs": "^2.0.0",
+              "@tauri-apps/plugin-shell": "^2.0.0",
+              "codemirror": "^6.0.1"
+            },
+            "devDependencies": {
+              "@tauri-apps/cli": "^2.0.0",
+              "typescript": "^5.5.3",
+              "vite": "^5.3.4"
+            }
+          }
+          EOF
+          fi
+
+          # 2. Tự tạo tsconfig.json nếu chưa có
+          if [ ! -f "tsconfig.json" ]; then
+            cat << 'EOF' > tsconfig.json
+          {
+            "compilerOptions": {
+              "target": "ES2020",
+              "useDefineForClassFields": true,
+              "module": "ESNext",
+              "lib": ["ES2020", "DOM", "DOM.Iterable"],
+              "skipLibCheck": true,
+              "moduleResolution": "bundler",
+              "allowImportingTsExtensions": true,
+              "resolveJsonModule": true,
+              "isolatedModules": true,
+              "noEmit": true,
+              "strict": true
+            },
+            "include": ["src"]
+          }
+          EOF
+          fi
+
+          # 3. Tự tạo vite.config.ts nếu chưa có
+          if [ ! -f "vite.config.ts" ]; then
+            cat << 'EOF' > vite.config.ts
+          import { defineConfig } from "vite";
+          export default defineConfig({
+            clearScreen: false,
+            server: { port: 1420, strictPort: true },
+            envPrefix: ["VITE_", "TAURI_"],
+            build: { target: "es2021", minify: "esbuild", sourcemap: false }
+          });
+          EOF
+          fi
+
+          # 4. Tự tạo index.html nếu chưa có
+          if [ ! -f "index.html" ]; then
+            cat << 'EOF' > index.html
+          <!DOCTYPE html>
+          <html lang="vi">
+          <head>
+            <meta charset="UTF-8" />
+            <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+            <title>W edit v0.1</title>
+            <link rel="stylesheet" href="/src/styles.css" />
+          </head>
+          <body>
+            <header class="app-toolbar">
+              <div class="brand">W edit <span class="ver-badge">v0.1</span></div>
+              <div class="toolbar-actions">
+                <button id="btn-new">＋</button>
+                <button id="btn-open">📂</button>
+                <button id="btn-save">💾</button>
+                <button id="btn-undo">↩</button>
+                <button id="btn-redo">↪</button>
+                <button id="btn-search-toggle">🔍</button>
+                <button id="btn-gdrive">☁️</button>
+                <button id="btn-appearance">🎨</button>
+              </div>
+            </header>
+            <nav id="tab-bar" class="tab-bar"></nav>
+            <section id="search-panel" class="search-panel hidden">
+              <div class="search-row">
+                <input type="text" id="search-input" placeholder="Tìm kiếm (Regex)..." />
+                <label class="chip"><input type="checkbox" id="chk-case" /> Aa</label>
+                <label class="chip"><input type="checkbox" id="chk-regex" /> .*</label>
+                <button id="btn-find">Tìm</button>
+              </div>
+              <div class="search-row">
+                <input type="text" id="replace-input" placeholder="Thay thế bằng..." />
+                <button id="btn-replace-all">Thay tất cả</button>
+                <span id="search-summary">0 kết quả</span>
+              </div>
+            </section>
+            <main id="editor-host" class="editor-host"></main>
+            <section id="accessory-bar" class="accessory-bar">
+              <button data-insert="    ">Tab</button>
+              <button data-insert="{">{</button>
+              <button data-insert="}">}</button>
+              <button data-insert="(">(</button>
+              <button data-insert=")">)</button>
+              <button data-insert="[">[</button>
+              <button data-insert="]">]</button>
+              <button data-insert=";">;</button>
+              <button data-insert="=">=</button>
+              <button data-insert="&quot;">"</button>
+              <button data-insert="'">'</button>
+              <button data-insert="&lt;">&lt;</button>
+              <button data-insert="&gt;">&gt;</button>
+              <button data-insert="/">/</button>
+            </section>
+            <footer class="status-bar">
+              <span id="stat-cursor">Dòng 1, Cột 1</span>
+              <span id="stat-lines">1 dòng | 0 B</span>
+              <span id="stat-encoding">UTF-8</span>
+              <span id="stat-sync">📱 Local</span>
+            </footer>
+            <div id="appearance-modal" class="modal hidden">
+              <div class="modal-card">
+                <div class="modal-header">
+                  <h3>🎨 Giao diện RGB & Phông chữ (W edit v0.1)</h3>
+                  <button id="btn-close-appearance">✕</button>
+                </div>
+                <div class="modal-body">
+                  <div class="settings-group">
+                    <h4>1. Phông chữ & Kích thước</h4>
+                    <div class="setting-row">
+                      <select id="select-font-family">
+                        <option value="'JetBrains Mono', monospace">JetBrains Mono</option>
+                        <option value="'Fira Code', monospace">Fira Code</option>
+                        <option value="monospace">Monospace</option>
+                      </select>
+                      <button id="btn-import-font">➕ Thêm Font (.ttf/.otf)</button>
+                    </div>
+                    <div class="setting-row">
+                      <label>Cỡ chữ: <strong id="lbl-font-size">14px</strong></label>
+                      <input type="range" id="slider-font-size" min="10" max="32" value="14" />
+                    </div>
+                  </div>
+                  <div class="settings-group">
+                    <h4>2. Bảng màu RGB tự do</h4>
+                    <div class="setting-row">
+                      <select id="select-color-target">
+                        <option value="--bg-primary">Nền Trình soạn thảo</option>
+                        <option value="--bg-secondary">Nền Thanh công cụ & Tab</option>
+                        <option value="--bg-surface">Nền Nút bấm</option>
+                        <option value="--text-main">Màu Chữ chính</option>
+                        <option value="--accent">Màu Nhấn</option>
+                        <option value="--border">Màu Đường viền</option>
+                      </select>
+                    </div>
+                    <div class="rgb-mixer">
+                      <div class="rgb-slider-row">
+                        <span class="rgb-tag r-tag">R</span>
+                        <input type="range" id="rgb-r" min="0" max="255" value="30" />
+                        <input type="number" id="num-r" min="0" max="255" value="30" />
+                      </div>
+                      <div class="rgb-slider-row">
+                        <span class="rgb-tag g-tag">G</span>
+                        <input type="range" id="rgb-g" min="0" max="255" value="30" />
+                        <input type="number" id="num-g" min="0" max="255" value="30" />
+                      </div>
+                      <div class="rgb-slider-row">
+                        <span class="rgb-tag b-tag">B</span>
+                        <input type="range" id="rgb-b" min="0" max="255" value="46" />
+                        <input type="number" id="num-b" min="0" max="255" value="46" />
+                      </div>
+                      <div class="rgb-preview-row">
+                        <input type="color" id="native-color-picker" value="#1e1e2e" />
+                        <code id="hex-output">#1E1E2E</code>
+                      </div>
+                    </div>
+                    <div class="preset-row">
+                      <button id="btn-preset-dark">🌙 Dark</button>
+                      <button id="btn-preset-light">☀️ Light</button>
+                      <button id="btn-preset-amoled">🖤 AMOLED</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div id="gdrive-modal" class="modal hidden">
+              <div class="modal-card">
+                <div class="modal-header">
+                  <h3>☁️ Liên kết Google Drive</h3>
+                  <button id="btn-close-modal">✕</button>
+                </div>
+                <div class="modal-body">
+                  <button id="btn-gdrive-login">1. Lấy link Đăng nhập Google</button>
+                  <div class="code-verify-row">
+                    <input type="text" id="gdrive-code-input" placeholder="Dán mã Auth Code..." />
+                    <button id="btn-gdrive-verify">2. Xác nhận</button>
+                  </div>
+                  <div class="drive-actions">
+                    <button id="btn-gdrive-refresh">🔄 Tải danh sách file</button>
+                    <button id="btn-gdrive-upload">⬆️ Lưu lên Drive</button>
+                  </div>
+                  <ul id="gdrive-file-list" class="file-list"></ul>
+                </div>
+              </div>
+            </div>
+            <script type="module" src="/src/main.ts"></script>
+          </body>
+          </html>
+          EOF
+          fi
+
+          # 5. Tự tạo src/styles.css nếu chưa có
+          if [ ! -f "src/styles.css" ]; then
+            cat << 'EOF' > src/styles.css
+          :root {
+            --bg-primary: #1e1e2e;
+            --bg-secondary: #181825;
+            --bg-surface: #313244;
+            --text-main: #cdd6f4;
+            --text-muted: #a6adc8;
+            --accent: #89b4fa;
+            --border: #45475a;
+            --editor-font: 'JetBrains Mono', monospace;
+            --editor-font-size: 14px;
+          }
+          * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
+          body { font-family: system-ui, sans-serif; background: var(--bg-primary); color: var(--text-main); height: 100dvh; display: flex; flex-direction: column; overflow: hidden; }
+          .hidden { display: none !important; }
+          .app-toolbar, .status-bar { display: flex; justify-content: space-between; align-items: center; background: var(--bg-secondary); padding: 6px 10px; border-bottom: 1px solid var(--border); }
+          .brand { font-weight: 800; color: var(--accent); display: flex; gap: 6px; align-items: center; }
+          .ver-badge { font-size: 11px; background: var(--bg-surface); padding: 2px 6px; border-radius: 4px; color: var(--text-main); }
+          .toolbar-actions, .search-row, .setting-row, .rgb-slider-row, .preset-row, .code-verify-row, .drive-actions { display: flex; gap: 6px; align-items: center; }
+          button, select, input { background: var(--bg-surface); color: var(--text-main); border: 1px solid var(--border); border-radius: 6px; padding: 6px 9px; font-size: 13px; }
+          .tab-bar, .accessory-bar { display: flex; overflow-x: auto; background: var(--bg-secondary); border-bottom: 1px solid var(--border); }
+          .tab-item { padding: 8px 14px; font-size: 13px; color: var(--text-muted); border-right: 1px solid var(--border); white-space: nowrap; display: flex; gap: 8px; cursor: pointer; }
+          .tab-item.active { background: var(--bg-primary); color: var(--accent); border-bottom: 2px solid var(--accent); font-weight: 600; }
+          .editor-host { flex: 1; overflow: hidden; }
+          .cm-editor { height: 100%; background: var(--bg-primary) !important; color: var(--text-main) !important; }
+          .cm-editor .cm-scroller { font-family: var(--editor-font) !important; font-size: var(--editor-font-size) !important; }
+          .modal { position: fixed; inset: 0; background: rgba(0,0,0,0.72); display: flex; align-items: center; justify-content: center; z-index: 100; padding: 14px; }
+          .modal-card { background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 10px; width: 100%; max-width: 480px; max-height: 85vh; display: flex; flex-direction: column; }
+          .modal-header { display: flex; justify-content: space-between; padding: 12px; border-bottom: 1px solid var(--border); }
+          .modal-body { padding: 12px; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }
+          .settings-group, .rgb-mixer { border: 1px solid var(--border); border-radius: 8px; padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+          .file-list { list-style: none; max-height: 180px; overflow-y: auto; }
+          .file-list li { padding: 8px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; }
+          EOF
+          fi
+
+          # 6. Tự tạo src/main.ts nếu chưa có
+          if [ ! -f "src/main.ts" ]; then
+            cat << 'EOF' > src/main.ts
+          import { invoke } from "@tauri-apps/api/core";
+          import { open, save } from "@tauri-apps/plugin-dialog";
+          import { open as openBrowser } from "@tauri-apps/plugin-shell";
+          import { EditorState, Compartment } from "@codemirror/state";
+          import { EditorView, lineNumbers, highlightActiveLine, keymap } from "@codemirror/view";
+          import { defaultKeymap, indentWithTab } from "@codemirror/commands";
+          import { bracketMatching, foldGutter } from "@codemirror/language";
+          import { closeBrackets } from "@codemirror/autocomplete";
+          import { oneDark } from "@codemirror/theme-one-dark";
+          import { rust } from "@codemirror/lang-rust";
+          import { javascript } from "@codemirror/lang-javascript";
+          import { python } from "@codemirror/lang-python";
+          import { html } from "@codemirror/lang-html";
+          import { css } from "@codemirror/lang-css";
+          import { json } from "@codemirror/lang-json";
+          import { markdown } from "@codemirror/lang-markdown";
+          import { cpp } from "@codemirror/lang-cpp";
+
+          let activeTabId = "";
+          let activeMeta: any = null;
+          let isInternalChange = false;
+          let debounceTimer: number | undefined;
+          const languageCompartment = new Compartment();
+          let editorView: EditorView;
+
+          const DEFAULT_DARK_COLORS: Record<string, string> = {
+            "--bg-primary": "#1e1e2e",
+            "--bg-secondary": "#181825",
+            "--bg-surface": "#313244",
+            "--text-main": "#cdd6f4",
+            "--accent": "#89b4fa",
+            "--border": "#45475a",
+          };
+          let currentCustomColors: Record<string, string> = { ...DEFAULT_DARK_COLORS };
+
+          function detectLanguageExtension(filename: string) {
+            const ext = filename.split(".").pop()?.toLowerCase();
+            switch (ext) {
+              case "rs": return rust();
+              case "js": case "ts": return javascript({ typescript: true });
+              case "py": return python();
+              case "html": return html();
+              case "css": return css();
+              case "json": return json();
+              case "c": case "cpp": return cpp();
+              default: return markdown();
+            }
+          }
+
+          function initEditor() {
+            const host = document.getElementById("editor-host")!;
+            const state = EditorState.create({
+              doc: "",
+              extensions: [
+                lineNumbers(), highlightActiveLine(), foldGutter(), bracketMatching(), closeBrackets(),
+                EditorView.lineWrapping, oneDark, languageCompartment.of(markdown()),
+                keymap.of([...defaultKeymap, indentWithTab]),
+                EditorView.updateListener.of((update) => {
+                  if (update.selectionSet) {
+                    const pos = editorView.state.selection.main.head;
+                    const line = editorView.state.doc.lineAt(pos);
+                    document.getElementById("stat-cursor")!.textContent = `Dòng ${line.number}, Cột ${pos - line.from + 1}`;
+                  }
+                  if (update.docChanged && !isInternalChange && activeTabId) {
+                    clearTimeout(debounceTimer);
+                    debounceTimer = window.setTimeout(async () => {
+                      const meta = await invoke<any>("update_buffer", { tabId: activeTabId, content: editorView.state.doc.toString() });
+                      updateStatusBar(meta);
+                      await refreshTabBar();
+                    }, 250);
+                  }
+                }),
+              ],
+            });
+            editorView = new EditorView({ state, parent: host });
+          }
+
+          function setEditorText(content: string, filename: string) {
+            isInternalChange = true;
+            editorView.dispatch({
+              changes: { from: 0, to: editorView.state.doc.length, insert: content },
+              effects: languageCompartment.reconfigure(detectLanguageExtension(filename)),
+            });
+            isInternalChange = false;
+          }
+
+          function updateStatusBar(meta: any) {
+            activeMeta = meta;
+            document.getElementById("stat-lines")!.textContent = `${meta.total_lines} dòng | ${meta.total_bytes} B`;
+            document.getElementById("stat-encoding")!.textContent = meta.encoding;
+            document.getElementById("stat-sync")!.textContent = meta.gdrive_file_id ? "☁️ Drive" : "📱 Local";
+          }
+
+          async function refreshTabBar() {
+            const tabs = await invoke<any[]>("get_all_tabs");
+            const tabBar = document.getElementById("tab-bar")!;
+            tabBar.innerHTML = "";
+            tabs.forEach((tab) => {
+              const item = document.createElement("div");
+              item.className = `tab-item ${tab.id === activeTabId ? "active" : ""}`;
+              item.innerHTML = `<span>${tab.is_modified ? "● " : ""}${tab.title}</span>`;
+              const closeBtn = document.createElement("span");
+              closeBtn.textContent = "✕";
+              closeBtn.onclick = async (e) => {
+                e.stopPropagation();
+                const nextId = await invoke<string | null>("close_tab", { tabId: tab.id });
+                if (nextId) await switchToTab(nextId);
+              };
+              item.onclick = () => switchToTab(tab.id);
+              item.appendChild(closeBtn);
+              tabBar.appendChild(item);
+            });
+          }
+
+          async function switchToTab(tabId: string) {
+            const res = await invoke<any>("switch_tab", { tabId });
+            activeTabId = res.metadata.id;
+            setEditorText(res.content, res.metadata.title);
+            updateStatusBar(res.metadata);
+            await refreshTabBar();
+          }
+
+          function applyAllColorsToDOM() {
+            for (const [k, v] of Object.entries(currentCustomColors)) {
+              document.documentElement.style.setProperty(k, v);
+            }
+          }
+
+          window.addEventListener("DOMContentLoaded", async () => {
+            initEditor();
+            applyAllColorsToDOM();
+            const tabs = await invoke<any[]>("get_all_tabs");
+            if (tabs.length > 0) await switchToTab(tabs[0].id);
+
+            document.getElementById("btn-new")!.onclick = async () => {
+              const res = await invoke<any>("create_new_tab", { title: null });
+              activeTabId = res.metadata.id;
+              setEditorText(res.content, res.metadata.title);
+              updateStatusBar(res.metadata);
+              await refreshTabBar();
+            };
+            document.getElementById("btn-open")!.onclick = async () => {
+              const selected = await open({ multiple: false });
+              if (typeof selected === "string") {
+                const res = await invoke<any>("open_local_file", { path: selected });
+                activeTabId = res.metadata.id;
+                setEditorText(res.content, res.metadata.title);
+                updateStatusBar(res.metadata);
+                await refreshTabBar();
+              }
+            };
+            document.getElementById("btn-save")!.onclick = async () => {
+              if (!activeMeta) return;
+              const targetPath = activeMeta.file_path || (await save({ defaultPath: activeMeta.title }));
+              if (targetPath) {
+                const meta = await invoke<any>("save_local_file", { tabId: activeTabId, path: targetPath });
+                updateStatusBar(meta);
+                await refreshTabBar();
+              }
+            };
+            document.getElementById("btn-undo")!.onclick = async () => {
+              try {
+                const res = await invoke<any>("undo_action", { tabId: activeTabId });
+                setEditorText(res.content, res.metadata.title);
+                updateStatusBar(res.metadata);
+              } catch (_) {}
+            };
+            document.getElementById("btn-redo")!.onclick = async () => {
+              try {
+                const res = await invoke<any>("redo_action", { tabId: activeTabId });
+                setEditorText(res.content, res.metadata.title);
+                updateStatusBar(res.metadata);
+              } catch (_) {}
+            };
+            document.getElementById("btn-search-toggle")!.onclick = () => document.getElementById("search-panel")!.classList.toggle("hidden");
+            document.getElementById("btn-appearance")!.onclick = () => document.getElementById("appearance-modal")!.classList.remove("hidden");
+            document.getElementById("btn-close-appearance")!.onclick = () => document.getElementById("appearance-modal")!.classList.add("hidden");
+            document.getElementById("btn-gdrive")!.onclick = () => document.getElementById("gdrive-modal")!.classList.remove("hidden");
+            document.getElementById("btn-close-modal")!.onclick = () => document.getElementById("gdrive-modal")!.classList.add("hidden");
+
+            const targetSelect = document.getElementById("select-color-target") as HTMLSelectElement;
+            const rSlider = document.getElementById("rgb-r") as HTMLInputElement;
+            const gSlider = document.getElementById("rgb-g") as HTMLInputElement;
+            const bSlider = document.getElementById("rgb-b") as HTMLInputElement;
+            const rNum = document.getElementById("num-r") as HTMLInputElement;
+            const gNum = document.getElementById("num-g") as HTMLInputElement;
+            const bNum = document.getElementById("num-b") as HTMLInputElement;
+            const colorWheel = document.getElementById("native-color-picker") as HTMLInputElement;
+            const hexOutput = document.getElementById("hex-output")!;
+
+            function updateRgb() {
+              const r = parseInt(rSlider.value, 10) || 0;
+              const g = parseInt(gSlider.value, 10) || 0;
+              const b = parseInt(bSlider.value, 10) || 0;
+              rNum.value = String(r); gNum.value = String(g); bNum.value = String(b);
+              const hex = "#" + [r, g, b].map(x => x.toString(16).padStart(2, "0")).join("");
+              colorWheel.value = hex;
+              hexOutput.textContent = hex.toUpperCase();
+              currentCustomColors[targetSelect.value] = hex;
+              applyAllColorsToDOM();
+            }
+            [rSlider, gSlider, bSlider].forEach(el => el.oninput = updateRgb);
+            colorWheel.oninput = () => {
+              const n = parseInt(colorWheel.value.slice(1), 16);
+              rSlider.value = String((n >> 16) & 255);
+              gSlider.value = String((n >> 8) & 255);
+              bSlider.value = String(n & 255);
+              updateRgb();
+            };
+
+            document.getElementById("btn-import-font")!.onclick = async () => {
+              const selected = await open({ multiple: false, filters: [{ name: "Fonts", extensions: ["ttf", "otf", "woff", "woff2"] }] });
+              if (typeof selected === "string") {
+                const fontData = await invoke<any>("load_custom_font", { path: selected });
+                const face = new FontFace(fontData.font_family, `url(${fontData.data_url})`);
+                await face.load();
+                document.fonts.add(face);
+                document.documentElement.style.setProperty("--editor-font", `'${fontData.font_family}', monospace`);
+              }
+            };
+          });
+          EOF
+          fi
+
+          # 7. Tự tạo src-tauri/Cargo.toml nếu chưa có
+          if [ ! -f "src-tauri/Cargo.toml" ]; then
+            cat << 'EOF' > src-tauri/Cargo.toml
+          [package]
+          name = "w-edit"
+          version = "0.1.0"
+          description = "W edit v0.1 - Rust Text Editor"
+          authors = ["W edit Creator"]
+          edition = "2021"
+
+          [lib]
+          name = "w_edit_lib"
+          crate-type = ["staticlib", "cdylib", "rlib"]
+
+          [build-dependencies]
+          tauri-build = { version = "2.0.0", features = [] }
+
+          [dependencies]
+          tauri = { version = "2.0.0", features = [] }
+          tauri-plugin-fs = "2.0.0"
+          tauri-plugin-dialog = "2.0.0"
+          tauri-plugin-shell = "2.0.0"
+          serde = { version = "1.0", features = ["derive"] }
+          serde_json = "1.0"
+          tokio = { version = "1.38", features = ["full"] }
+          ropey = "1.6.1"
+          chardetng = "0.1.17"
+          encoding_rs = "0.8.34"
+          regex = "1.10.5"
+          reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "multipart", "stream"] }
+          sha2 = "0.10"
+          base64 = "0.22"
+          rand = "0.8"
+          urlencoding = "2.1"
+          uuid = { version = "1.8", features = ["v4"] }
+          thiserror = "1.0"
+          EOF
+          fi
+
+          # 8. Tự tạo src-tauri/build.rs nếu chưa có
+          if [ ! -f "src-tauri/build.rs" ]; then
+            cat << 'EOF' > src-tauri/build.rs
+          fn main() {
+              tauri_build::build()
+          }
+          EOF
+          fi
+
+          # 9. Tự tạo src-tauri/tauri.conf.json nếu chưa có
+          if [ ! -f "src-tauri/tauri.conf.json" ]; then
+            cat << 'EOF' > src-tauri/tauri.conf.json
+          {
+            "$schema": "https://schema.tauri.app/config/2",
+            "productName": "W edit",
+            "version": "0.1.0",
+            "identifier": "com.opensource.wedit",
+            "build": {
+              "beforeDevCommand": "npm run dev",
+              "devUrl": "http://localhost:1420",
+              "beforeBuildCommand": "npm run build",
+              "frontendDist": "../dist"
+            },
+            "app": {
+              "withGlobalTauri": true,
+              "windows": [
+                {
+                  "title": "W edit v0.1",
+                  "width": 800,
+                  "height": 600,
+                  "resizable": true,
+                  "fullscreen": false
+                }
+              ],
+              "security": { "csp": null }
+            },
+            "bundle": {
+              "active": true,
+              "targets": "all",
+              "android": { "minSdkVersion": 24 },
+              "icon": [
+                "icons/32x32.png",
+                "icons/128x128.png",
+                "icons/128x128@2x.png",
+                "icons/icon.icns",
+                "icons/icon.ico"
+              ]
+            }
+          }
+          EOF
+          fi
+
+          # 10. Tự tạo src-tauri/capabilities/default.json nếu chưa có
+          if [ ! -f "src-tauri/capabilities/default.json" ]; then
+            cat << 'EOF' > src-tauri/capabilities/default.json
+          {
+            "identifier": "default",
+            "description": "Permissions for W edit v0.1",
+            "windows": ["main"],
+            "permissions": [
+              "core:default",
+              "fs:default",
+              "fs:allow-read",
+              "fs:allow-write",
+              "dialog:default",
+              "shell:allow-open"
+            ]
+          }
+          EOF
+          fi
+
+          # 11. Tự tạo các file Rust trong src-tauri/src/ nếu chưa có
+          if [ ! -f "src-tauri/src/main.rs" ]; then
+            cat << 'EOF' > src-tauri/src/main.rs
+          #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+          fn main() {
+              w_edit_lib::run();
+          }
+          EOF
+          fi
+
+          if [ ! -f "src-tauri/src/editor.rs" ]; then
+            cat << 'EOF' > src-tauri/src/editor.rs
+          use chardetng::EncodingDetector;
+          use encoding_rs::Encoding;
+          use regex::RegexBuilder;
+          use ropey::Rope;
+          use serde::{Deserialize, Serialize};
+          use std::collections::HashMap;
+          use std::fs::File;
+          use std::io::{BufReader, BufWriter, Read, Write};
+          use std::path::Path;
+          use uuid::Uuid;
+
+          #[derive(Serialize, Deserialize, Clone, Debug)]
+          pub struct DocumentMetadata {
+              pub id: String,
+              pub title: String,
+              pub file_path: Option<String>,
+              pub gdrive_file_id: Option<String>,
+              pub encoding: String,
+              pub total_lines: usize,
+              pub total_chars: usize,
+              pub total_bytes: usize,
+              pub is_modified: bool,
+          }
+
+          #[derive(Serialize, Deserialize, Clone, Debug)]
+          pub struct SearchMatch {
+              pub line: usize,
+              pub start_col: usize,
+              pub end_col: usize,
+              pub matched_text: String,
+              pub line_preview: String,
+          }
+
+          pub struct DocumentSession {
+              pub metadata: DocumentMetadata,
+              pub rope: Rope,
+              pub undo_stack: Vec<Rope>,
+              pub redo_stack: Vec<Rope>,
+          }
+
+          impl DocumentSession {
+              pub fn new_empty(title: &str) -> Self {
+                  let id = Uuid::new_v4().to_string();
+                  Self {
+                      metadata: DocumentMetadata {
+                          id,
+                          title: title.to_string(),
+                          file_path: None,
+                          gdrive_file_id: None,
+                          encoding: "UTF-8".to_string(),
+                          total_lines: 1,
+                          total_chars: 0,
+                          total_bytes: 0,
+                          is_modified: false,
+                      },
+                      rope: Rope::new(),
+                      undo_stack: Vec::new(),
+                      redo_stack: Vec::new(),
+                  }
+              }
+              pub fn refresh_stats(&mut self) {
+                  self.metadata.total_lines = self.rope.len_lines();
+                  self.metadata.total_chars = self.rope.len_chars();
+                  self.metadata.total_bytes = self.rope.len_bytes();
+              }
+              pub fn push_undo(&mut self) {
+                  if self.undo_stack.len() >= 100 { self.undo_stack.remove(0); }
+                  self.undo_stack.push(self.rope.clone());
+                  self.redo_stack.clear();
+              }
+          }
+
+          pub struct EditorManager {
+              pub sessions: HashMap<String, DocumentSession>,
+              pub active_tab_id: Option<String>,
+          }
+
+          impl EditorManager {
+              pub fn new() -> Self {
+                  let mut manager = Self { sessions: HashMap::new(), active_tab_id: None };
+                  let doc = DocumentSession::new_empty("Untitled-1.txt");
+                  let id = doc.metadata.id.clone();
+                  manager.sessions.insert(id.clone(), doc);
+                  manager.active_tab_id = Some(id);
+                  manager
+              }
+              pub fn open_local_file(&mut self, path_str: &str) -> Result<(DocumentMetadata, String), String> {
+                  let path = Path::new(path_str);
+                  let file = File::open(path).map_err(|e| e.to_string())?;
+                  let mut reader = BufReader::new(file);
+                  let mut raw_bytes = Vec::new();
+                  reader.read_to_end(&mut raw_bytes).map_err(|e| e.to_string())?;
+                  let mut detector = EncodingDetector::new();
+                  detector.feed(&raw_bytes, true);
+                  let encoding = detector.guess(None, true);
+                  let (decoded, _, _) = encoding.decode(&raw_bytes);
+                  let content_str = decoded.into_owned();
+                  let rope = Rope::from_str(&content_str);
+                  let title = path.file_name().and_then(|n| n.to_str()).unwrap_or("Unknown").to_string();
+                  let id = Uuid::new_v4().to_string();
+                  let mut session = DocumentSession {
+                      metadata: DocumentMetadata {
+                          id: id.clone(), title, file_path: Some(path_str.to_string()), gdrive_file_id: None,
+                          encoding: encoding.name().to_string(), total_lines: 0, total_chars: 0, total_bytes: 0, is_modified: false,
+                      },
+                      rope, undo_stack: Vec::new(), redo_stack: Vec::new(),
+                  };
+                  session.refresh_stats();
+                  let meta = session.metadata.clone();
+                  self.sessions.insert(id.clone(), session);
+                  self.active_tab_id = Some(id);
+                  Ok((meta, content_str))
+              }
+              pub fn load_from_gdrive(&mut self, title: String, gdrive_id: String, content: String) -> DocumentMetadata {
+                  let id = Uuid::new_v4().to_string();
+                  let mut session = DocumentSession {
+                      metadata: DocumentMetadata {
+                          id: id.clone(), title, file_path: None, gdrive_file_id: Some(gdrive_id),
+                          encoding: "UTF-8".to_string(), total_lines: 0, total_chars: 0, total_bytes: 0, is_modified: false,
+                      },
+                      rope: Rope::from_str(&content), undo_stack: Vec::new(), redo_stack: Vec::new(),
+                  };
+                  session.refresh_stats();
+                  let meta = session.metadata.clone();
+                  self.sessions.insert(id.clone(), session);
+                  self.active_tab_id = Some(id);
+                  meta
+              }
+              pub fn update_content(&mut self, tab_id: &str, new_content: &str) -> Result<DocumentMetadata, String> {
+                  let s = self.sessions.get_mut(tab_id).ok_or("Tab not found")?;
+                  s.push_undo();
+                  s.rope = Rope::from_str(new_content);
+                  s.metadata.is_modified = true;
+                  s.refresh_stats();
+                  Ok(s.metadata.clone())
+              }
+              pub fn save_local_file(&mut self, tab_id: &str, override_path: Option<String>) -> Result<DocumentMetadata, String> {
+                  let s = self.sessions.get_mut(tab_id).ok_or("Tab not found")?;
+                  if let Some(p) = override_path {
+                      s.metadata.file_path = Some(p.clone());
+                      if let Some(name) = Path::new(&p).file_name().and_then(|n| n.to_str()) { s.metadata.title = name.to_string(); }
+                  }
+                  let target = s.metadata.file_path.as_ref().ok_or("No path")?;
+                  let text = s.rope.to_string();
+                  let enc = Encoding::for_label(s.metadata.encoding.as_bytes()).unwrap_or(encoding_rs::UTF_8);
+                  let (bytes, _, _) = enc.encode(&text);
+                  let file = File::create(target).map_err(|e| e.to_string())?;
+                  let mut writer = BufWriter::new(file);
+                  writer.write_all(&bytes).map_err(|e| e.to_string())?;
+                  writer.flush().map_err(|e| e.to_string())?;
+                  s.metadata.is_modified = false;
+                  s.refresh_stats();
+                  Ok(s.metadata.clone())
+              }
+              pub fn undo(&mut self, tab_id: &str) -> Result<(DocumentMetadata, String), String> {
+                  let s = self.sessions.get_mut(tab_id).ok_or("Tab not found")?;
+                  if let Some(prev) = s.undo_stack.pop() {
+                      s.redo_stack.push(s.rope.clone());
+                      s.rope = prev;
+                      s.refresh_stats();
+                      Ok((s.metadata.clone(), s.rope.to_string()))
+                  } else { Err("Empty undo".to_string()) }
+              }
+              pub fn redo(&mut self, tab_id: &str) -> Result<(DocumentMetadata, String), String> {
+                  let s = self.sessions.get_mut(tab_id).ok_or("Tab not found")?;
+                  if let Some(next) = s.redo_stack.pop() {
+                      s.undo_stack.push(s.rope.clone());
+                      s.rope = next;
+                      s.refresh_stats();
+                      Ok((s.metadata.clone(), s.rope.to_string()))
+                  } else { Err("Empty redo".to_string()) }
+              }
+              pub fn search_in_tab(&self, tab_id: &str, query: &str, case_sensitive: bool, use_regex: bool) -> Result<Vec<SearchMatch>, String> {
+                  if query.is_empty() { return Ok(Vec::new()); }
+                  let s = self.sessions.get(tab_id).ok_or("Tab not found")?;
+                  let pat = if use_regex { query.to_string() } else { regex::escape(query) };
+                  let re = RegexBuilder::new(&pat).case_insensitive(!case_sensitive).build().map_err(|e| e.to_string())?;
+                  let mut results = Vec::new();
+                  for (idx, line) in s.rope.lines().enumerate() {
+                      let l_str = line.to_string();
+                      for m in re.find_iter(&l_str) {
+                          results.push(SearchMatch {
+                              line: idx + 1, start_col: m.start() + 1, end_col: m.end() + 1,
+                              matched_text: m.as_str().to_string(), line_preview: l_str.trim_end().chars().take(100).collect(),
+                          });
+                          if results.len() >= 500 { return Ok(results); }
+                      }
+                  }
+                  Ok(results)
+              }
+              pub fn replace_all_in_tab(&mut self, tab_id: &str, query: &str, replacement: &str, case_sensitive: bool, use_regex: bool) -> Result<(DocumentMetadata, String, usize), String> {
+                  let s = self.sessions.get_mut(tab_id).ok_or("Tab not found")?;
+                  let pat = if use_regex { query.to_string() } else { regex::escape(query) };
+                  let re = RegexBuilder::new(&pat).case_insensitive(!case_sensitive).build().map_err(|e| e.to_string())?;
+                  let text = s.rope.to_string();
+                  let count = re.find_iter(&text).count();
+                  if count > 0 {
+                      s.push_undo();
+                      let replaced = re.replace_all(&text, replacement).into_owned();
+                      s.rope = Rope::from_str(&replaced);
+                      s.metadata.is_modified = true;
+                      s.refresh_stats();
+                      Ok((s.metadata.clone(), replaced, count))
+                  } else { Ok((s.metadata.clone(), text, 0)) }
+              }
+          }
+          EOF
+          fi
+
+          if [ ! -f "src-tauri/src/gdrive.rs" ]; then
+            cat << 'EOF' > src-tauri/src/gdrive.rs
+          use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+          use rand::RngCore;
+          use reqwest::Client;
+          use serde::{Deserialize, Serialize};
+          use sha2::{Digest, Sha256};
+
+          #[derive(Serialize, Deserialize, Clone, Debug)]
+          pub struct GDriveFile {
+              pub id: String,
+              pub name: String,
+              #[serde(rename = "mimeType")]
+              pub mime_type: String,
+          }
+
+          #[derive(Deserialize)]
+          struct FileListResponse { files: Vec<GDriveFile> }
+
+          #[derive(Serialize, Deserialize, Clone, Debug)]
+          pub struct OAuthToken {
+              pub access_token: String,
+              pub refresh_token: Option<String>,
+              pub expires_in: u64,
+              pub token_type: String,
+          }
+
+          pub struct GoogleDriveClient {
+              http: Client,
+              pub client_id: String,
+              pub redirect_uri: String,
+              pub code_verifier: Option<String>,
+              pub token: Option<OAuthToken>,
+          }
+
+          impl GoogleDriveClient {
+              pub fn new(client_id: &str, redirect_uri: &str) -> Self {
+                  Self { http: Client::new(), client_id: client_id.to_string(), redirect_uri: redirect_uri.to_string(), code_verifier: None, token: None }
+              }
+              pub fn generate_auth_url(&mut self) -> String {
+                  let mut bytes = [0u8; 32];
+                  rand::thread_rng().fill_bytes(&mut bytes);
+                  let verifier = URL_SAFE_NO_PAD.encode(bytes);
+                  let mut hasher = Sha256::new();
+                  hasher.update(verifier.as_bytes());
+                  let challenge = URL_SAFE_NO_PAD.encode(hasher.finalize());
+                  self.code_verifier = Some(verifier);
+                  let scope = urlencoding::encode("https://www.googleapis.com/auth/drive");
+                  let redirect = urlencoding::encode(&self.redirect_uri);
+                  format!("https://accounts.google.com/o/oauth2/v2/auth?client_id={}&redirect_uri={}&response_type=code&scope={}&code_challenge={}&code_challenge_method=S256&access_type=offline&prompt=consent", self.client_id, redirect, scope, challenge)
+              }
+              pub async fn exchange_code_for_token(&mut self, auth_code: &str) -> Result<OAuthToken, String> {
+                  let verifier = self.code_verifier.as_ref().ok_or("No PKCE verifier")?;
+                  let params = [("client_id", self.client_id.as_str()), ("code", auth_code), ("code_verifier", verifier.as_str()), ("grant_type", "authorization_code"), ("redirect_uri", self.redirect_uri.as_str())];
+                  let resp = self.http.post("https://oauth2.googleapis.com/token").form(&params).send().await.map_err(|e| e.to_string())?;
+                  let token_data: OAuthToken = resp.json().await.map_err(|e| e.to_string())?;
+                  self.token = Some(token_data.clone());
+                  Ok(token_data)
+              }
+              fn bearer(&self) -> Result<&str, String> {
+                  self.token.as_ref().map(|t| t.access_token.as_str()).ok_or_else(|| "Not logged in".to_string())
+              }
+              pub async fn list_files(&self, folder_id: Option<&str>) -> Result<Vec<GDriveFile>, String> {
+                  let token = self.bearer()?;
+                  let q = format!("'{}' in parents and trashed = false", folder_id.unwrap_or("root"));
+                  let url = format!("https://www.googleapis.com/drive/v3/files?q={}&fields=files(id,name,mimeType)", urlencoding::encode(&q));
+                  let resp = self.http.get(&url).bearer_auth(token).send().await.map_err(|e| e.to_string())?;
+                  let list: FileListResponse = resp.json().await.map_err(|e| e.to_string())?;
+                  Ok(list.files)
+              }
+              pub async fn download_file_content(&self, file_id: &str) -> Result<String, String> {
+                  let token = self.bearer()?;
+                  let url = format!("https://www.googleapis.com/drive/v3/files/{}?alt=media", file_id);
+                  self.http.get(&url).bearer_auth(token).send().await.map_err(|e| e.to_string())?.text().await.map_err(|e| e.to_string())
+              }
+              pub async fn update_existing_file(&self, file_id: &str, content: &str) -> Result<GDriveFile, String> {
+                  let token = self.bearer()?;
+                  let url = format!("https://www.googleapis.com/upload/drive/v3/files/{}?uploadType=media&fields=id,name,mimeType", file_id);
+                  self.http.patch(&url).bearer_auth(token).header("Content-Type", "text/plain; charset=utf-8").body(content.to_string()).send().await.map_err(|e| e.to_string())?.json().await.map_err(|e| e.to_string())
+              }
+              pub async fn create_new_file(&self, name: &str, content: &str, parent_folder_id: Option<&str>) -> Result<GDriveFile, String> {
+                  let token = self.bearer()?;
+                  let b = "wedit_boundary";
+                  let meta = serde_json::json!({ "name": name, "mimeType": "text/plain", "parents": [parent_folder_id.unwrap_or("root")] });
+                  let body = format!("--{b}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n{meta}\r\n--{b}\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n{content}\r\n--{b}--");
+                  let url = "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,mimeType";
+                  self.http.post(url).bearer_auth(token).header("Content-Type", format!("multipart/related; boundary={}", b)).body(body).send().await.map_err(|e| e.to_string())?.json().await.map_err(|e| e.to_string())
+              }
+          }
+          EOF
+          fi
+
+          if [ ! -f "src-tauri/src/lib.rs" ]; then
+            cat << 'EOF' > src-tauri/src/lib.rs
+          pub mod editor;
+          pub mod gdrive;
+
+          use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
+          use editor::{DocumentMetadata, DocumentSession, EditorManager, SearchMatch};
+          use gdrive::{GDriveFile, GoogleDriveClient, OAuthToken};
+          use serde::Serialize;
+          use std::path::Path;
+          use tauri::State;
+          use tokio::sync::Mutex;
+
+          pub struct AppState {
+              pub editor: Mutex<EditorManager>,
+              pub gdrive: Mutex<GoogleDriveClient>,
+          }
+
+          #[derive(Serialize)]
+          pub struct TabContentResponse { pub metadata: DocumentMetadata, pub content: String }
+
+          #[derive(Serialize)]
+          pub struct ReplaceResponse { pub metadata: DocumentMetadata, pub content: String, pub replaced_count: usize }
+
+          #[derive(Serialize)]
+          pub struct CustomFontData { pub font_family: String, pub data_url: String }
+
+          #[tauri::command]
+          async fn create_new_tab(title: Option<String>, state: State<'_, AppState>) -> Result<TabContentResponse, String> {
+              let mut editor = state.editor.lock().await;
+              let t = title.unwrap_or_else(|| format!("Untitled-{}.txt", editor.sessions.len() + 1));
+              let doc = DocumentSession::new_empty(&t);
+              let meta = doc.metadata.clone();
+              editor.sessions.insert(meta.id.clone(), doc);
+              editor.active_tab_id = Some(meta.id.clone());
+              Ok(TabContentResponse { metadata: meta, content: String::new() })
+          }
+
+          #[tauri::command]
+          async fn get_all_tabs(state: State<'_, AppState>) -> Result<Vec<DocumentMetadata>, String> {
+              let editor = state.editor.lock().await;
+              Ok(editor.sessions.values().map(|s| s.metadata.clone()).collect())
+          }
+
+          #[tauri::command]
+          async fn switch_tab(tab_id: String, state: State<'_, AppState>) -> Result<TabContentResponse, String> {
+              let mut editor = state.editor.lock().await;
+              let s = editor.sessions.get(&tab_id).ok_or("Not found")?;
+              let resp = TabContentResponse { metadata: s.metadata.clone(), content: s.rope.to_string() };
+              editor.active_tab_id = Some(tab_id);
+              Ok(resp)
+          }
+
+          #[tauri::command]
+          async fn close_tab(tab_id: String, state: State<'_, AppState>) -> Result<Option<String>, String> {
+              let mut editor = state.editor.lock().await;
+              editor.sessions.remove(&tab_id);
+              if editor.sessions.is_empty() {
+                  let doc = DocumentSession::new_empty("Untitled-1.txt");
+                  let id = doc.metadata.id.clone();
+                  editor.sessions.insert(id.clone(), doc);
+                  editor.active_tab_id = Some(id);
+              } else if editor.active_tab_id.as_deref() == Some(&tab_id) {
+                  editor.active_tab_id = editor.sessions.keys().next().cloned();
+              }
+              Ok(editor.active_tab_id.clone())
+          }
+
+          #[tauri::command]
+          async fn open_local_file(path: String, state: State<'_, AppState>) -> Result<TabContentResponse, String> {
+              let mut editor = state.editor.lock().await;
+              let (metadata, content) = editor.open_local_file(&path)?;
+              Ok(TabContentResponse { metadata, content })
+          }
+
+          #[tauri::command]
+          async fn update_buffer(tab_id: String, content: String, state: State<'_, AppState>) -> Result<DocumentMetadata, String> {
+              let mut editor = state.editor.lock().await;
+              editor.update_content(&tab_id, &content)
+          }
+
+          #[tauri::command]
+          async fn save_local_file(tab_id: String, path: Option<String>, state: State<'_, AppState>) -> Result<DocumentMetadata, String> {
+              let mut editor = state.editor.lock().await;
+              editor.save_local_file(&tab_id, path)
+          }
+
+          #[tauri::command]
+          async fn undo_action(tab_id: String, state: State<'_, AppState>) -> Result<TabContentResponse, String> {
+              let mut editor = state.editor.lock().await;
+              let (metadata, content) = editor.undo(&tab_id)?;
+              Ok(TabContentResponse { metadata, content })
+          }
+
+          #[tauri::command]
+          async fn redo_action(tab_id: String, state: State<'_, AppState>) -> Result<TabContentResponse, String> {
+              let mut editor = state.editor.lock().await;
+              let (metadata, content) = editor.redo(&tab_id)?;
+              Ok(TabContentResponse { metadata, content })
+          }
+
+          #[tauri::command]
+          async fn search_text(tab_id: String, query: String, case_sensitive: bool, use_regex: bool, state: State<'_, AppState>) -> Result<Vec<SearchMatch>, String> {
+              let editor = state.editor.lock().await;
+              editor.search_in_tab(&tab_id, &query, case_sensitive, use_regex)
+          }
+
+          #[tauri::command]
+          async fn replace_all_text(tab_id: String, query: String, replacement: String, case_sensitive: bool, use_regex: bool, state: State<'_, AppState>) -> Result<ReplaceResponse, String> {
+              let mut editor = state.editor.lock().await;
+              let (metadata, content, replaced_count) = editor.replace_all_in_tab(&tab_id, &query, &replacement, case_sensitive, use_regex)?;
+              Ok(ReplaceResponse { metadata, content, replaced_count })
+          }
+
+          #[tauri::command]
+          async fn load_custom_font(path: String) -> Result<CustomFontData, String> {
+              let file_path = Path::new(&path);
+              let bytes = std::fs::read(file_path).map_err(|e| e.to_string())?;
+              let ext = file_path.extension().and_then(|e| e.to_str()).unwrap_or("ttf").to_lowercase();
+              let mime = match ext.as_str() { "otf" => "font/otf", "woff" => "font/woff", "woff2" => "font/woff2", _ => "font/ttf" };
+              let raw_name = file_path.file_stem().and_then(|s| s.to_str()).unwrap_or("CustomFont");
+              let clean: String = raw_name.chars().filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_').collect();
+              let font_family = if clean.is_empty() { "WEditFont".to_string() } else { clean };
+              let data_url = format!("data:{};base64,{}", mime, BASE64_STANDARD.encode(&bytes));
+              Ok(CustomFontData { font_family, data_url })
+          }
+
+          #[tauri::command]
+          async fn gdrive_get_auth_url(state: State<'_, AppState>) -> Result<String, String> {
+              let mut drive = state.gdrive.lock().await;
+              Ok(drive.generate_auth_url())
+          }
+
+          #[tauri::command]
+          async fn gdrive_authenticate(auth_code: String, state: State<'_, AppState>) -> Result<OAuthToken, String> {
+              let mut drive = state.gdrive.lock().await;
+              drive.exchange_code_for_token(&auth_code).await
+          }
+
+          #[tauri::command]
+          async fn gdrive_list_files(folder_id: Option<String>, state: State<'_, AppState>) -> Result<Vec<GDriveFile>, String> {
+              let drive = state.gdrive.lock().await;
+              drive.list_files(folder_id.as_deref()).await
+          }
+
+          #[tauri::command]
+          async fn gdrive_open_file(file_id: String, file_name: String, state: State<'_, AppState>) -> Result<TabContentResponse, String> {
+              let content = { let drive = state.gdrive.lock().await; drive.download_file_content(&file_id).await? };
+              let mut editor = state.editor.lock().await;
+              let metadata = editor.load_from_gdrive(file_name, file_id, content.clone());
+              Ok(TabContentResponse { metadata, content })
+          }
+
+          #[tauri::command]
+          async fn gdrive_save_file(tab_id: String, parent_folder_id: Option<String>, state: State<'_, AppState>) -> Result<DocumentMetadata, String> {
+              let (title, existing_id, content) = {
+                  let editor = state.editor.lock().await;
+                  let s = editor.sessions.get(&tab_id).ok_or("Not found")?;
+                  (s.metadata.title.clone(), s.metadata.gdrive_file_id.clone(), s.rope.to_string())
+              };
+              let drive = state.gdrive.lock().await;
+              let uploaded = if let Some(gid) = existing_id {
+                  drive.update_existing_file(&gid, &content).await?
+              } else {
+                  drive.create_new_file(&title, &content, parent_folder_id.as_deref()).await?
+              };
+              let mut editor = state.editor.lock().await;
+              let s = editor.sessions.get_mut(&tab_id).ok_or("Closed")?;
+              s.metadata.gdrive_file_id = Some(uploaded.id);
+              s.metadata.is_modified = false;
+              Ok(s.metadata.clone())
+          }
+
+          #[cfg_attr(mobile, tauri::mobile_entry_point)]
+          pub fn run() {
+              let client_id = std::env::var("GOOGLE_CLIENT_ID").unwrap_or_else(|_| "YOUR_GOOGLE_CLIENT_ID.apps.googleusercontent.com".to_string());
+              let redirect_uri = "http://localhost:8080/oauth2callback";
+              tauri::Builder::default()
+                  .plugin(tauri_plugin_fs::init())
+                  .plugin(tauri_plugin_dialog::init())
+                  .plugin(tauri_plugin_shell::init())
+                  .manage(AppState {
+                      editor: Mutex::new(EditorManager::new()),
+                      gdrive: Mutex::new(GoogleDriveClient::new(&client_id, redirect_uri)),
+                  })
+                  .invoke_handler(tauri::generate_handler![
+                      create_new_tab, get_all_tabs, switch_tab, close_tab, open_local_file,
+                      update_buffer, save_local_file, undo_action, redo_action, search_text,
+                      replace_all_text, load_custom_font, gdrive_get_auth_url, gdrive_authenticate,
+                      gdrive_list_files, gdrive_open_file, gdrive_save_file
+                  ])
+                  .run(tauri::generate_context!())
+                  .expect("Error running W edit v0.1");
+          }
+          EOF
+          fi
+
+      - name: 5. Cấu hình Android NDK r26d & Build-Tools
         run: |
           yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
           $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --install "ndk;26.3.11579264" "platforms;android-34" "build-tools;34.0.0"
           echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/26.3.11579264" >> $GITHUB_ENV
           echo "NDK_HOME=$ANDROID_HOME/ndk/26.3.11579264" >> $GITHUB_ENV
 
-      - name: 5. Cài đặt Rust & Bộ biên dịch Android
+      - name: 6. Cài đặt Rust & Bộ biên dịch Android
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
 
-      - name: 6. Cài đặt thư viện & Tự động tạo bộ Icon nếu chưa có
+      - name: 7. Cài đặt thư viện & Tạo bộ Icon chuẩn
         run: |
+          sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential libssl-dev libayatana-appindicator3-dev librsvg2-dev imagemagick
           npm install
-          cargo install tauri-cli --version "^2.0.0" --locked
           if [ ! -f "src-tauri/icons/32x32.png" ]; then
-            sudo apt-get update && sudo apt-get install -y imagemagick
-            convert -size 1024x1024 xc:#1e1e2e -fill "#89b4fa" -gravity center -pointsize 520 -annotate 0 "W" app-icon.png
+            convert -size 1024x1024 xc:"#1e1e2e" -fill "#89b4fa" -draw "roundrectangle 180,180 844,844 120,120" app-icon.png
             npx tauri icon app-icon.png
           fi
 
-      - name: 7. Khởi tạo khung Android & Biên dịch APK
+      - name: 8. Khởi tạo khung Android & Biên dịch APK
         run: |
           if [ ! -d "src-tauri/gen/android" ]; then
-            cargo tauri android init
+            npx tauri android init
           fi
-          cargo tauri android build --apk true
+          npx tauri android build --apk true
 
-      - name: 8. Ký số (Sign APK) để cài đặt trực tiếp lên điện thoại
+      - name: 9. Ký số (Sign APK) để cài đặt trực tiếp lên điện thoại
         run: |
           UNSIGNED_APK=$(find src-tauri/gen/android/app/build/outputs/apk -name "*-unsigned.apk" | head -n 1)
           if [ -n "$UNSIGNED_APK" ]; then
@@ -65,8 +1188,8 @@ jobs:
             cp "$SIGNED_APK" W-edit-v0.1.apk
           fi
 
-      - name: 9. Xuất file W-edit-v0.1.apk
-        uses: actions/upload-artifact@v4
+      - name: 10. Xuất file W-edit-v0.1.apk (Bản v7 chuẩn Node.js 24)
+        uses: actions/upload-artifact@v7
         with:
           name: W-edit-v0.1-APK
           path: W-edit-v0.1.apk

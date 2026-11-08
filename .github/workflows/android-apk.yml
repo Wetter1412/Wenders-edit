@@ -7,38 +7,37 @@ on:
 
 jobs:
   build-android-apk:
-    runs-on: ubuntu-latest
+    # Cố định phiên bản máy chủ Ubuntu 24.04 để tắt thông báo chuyển đổi Ubuntu 26
+    runs-on: ubuntu-24.04
 
     steps:
       - name: 1. Tải mã nguồn
         uses: actions/checkout@v4
 
-      - name: 2. Cài đặt Node.js 20
+      - name: 2. Cài đặt Node.js 24 (Thay thế bản 20 đã lỗi thời)
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: '24'
 
-      - name: 3. Cài đặt Java JDK 17
+      - name: 3. Cài đặt Java JDK 17 (Đã nâng lên bản v5)
         uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: 4. Cài đặt Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: 5. Tải Android NDK r26d & Build-Tools
+      - name: 4. Cấu hình Android NDK r26d & Build-Tools có sẵn trên máy chủ
         run: |
-          sdkmanager --install "ndk;26.3.11579264" "platforms;android-34" "build-tools;34.0.0"
+          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
+          $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --install "ndk;26.3.11579264" "platforms;android-34" "build-tools;34.0.0"
           echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/26.3.11579264" >> $GITHUB_ENV
           echo "NDK_HOME=$ANDROID_HOME/ndk/26.3.11579264" >> $GITHUB_ENV
 
-      - name: 6. Cài đặt Rust & Bộ biên dịch Android
+      - name: 5. Cài đặt Rust & Bộ biên dịch Android
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
 
-      - name: 7. Cài đặt thư viện & Tự động tạo bộ Icon nếu chưa có
+      - name: 6. Cài đặt thư viện & Tự động tạo bộ Icon nếu chưa có
         run: |
           npm install
           cargo install tauri-cli --version "^2.0.0" --locked
@@ -48,14 +47,14 @@ jobs:
             npx tauri icon app-icon.png
           fi
 
-      - name: 8. Khởi tạo khung Android & Biên dịch APK
+      - name: 7. Khởi tạo khung Android & Biên dịch APK
         run: |
           if [ ! -d "src-tauri/gen/android" ]; then
             cargo tauri android init
           fi
           cargo tauri android build --apk true
 
-      - name: 9. Ký số (Sign APK) để cài đặt trực tiếp lên điện thoại
+      - name: 8. Ký số (Sign APK) để cài đặt trực tiếp lên điện thoại
         run: |
           UNSIGNED_APK=$(find src-tauri/gen/android/app/build/outputs/apk -name "*-unsigned.apk" | head -n 1)
           if [ -n "$UNSIGNED_APK" ]; then
@@ -66,7 +65,7 @@ jobs:
             cp "$SIGNED_APK" W-edit-v0.1.apk
           fi
 
-      - name: 10. Xuất file W-edit-v0.1.apk
+      - name: 9. Xuất file W-edit-v0.1.apk
         uses: actions/upload-artifact@v4
         with:
           name: W-edit-v0.1-APK

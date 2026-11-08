@@ -1,0 +1,73 @@
+name: Build W edit v0.1 APK
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build-android-apk:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 1. Tải mã nguồn
+        uses: actions/checkout@v4
+
+      - name: 2. Cài đặt Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: 3. Cài đặt Java JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: 4. Cài đặt Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: 5. Tải Android NDK r26d & Build-Tools
+        run: |
+          sdkmanager --install "ndk;26.3.11579264" "platforms;android-34" "build-tools;34.0.0"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/26.3.11579264" >> $GITHUB_ENV
+          echo "NDK_HOME=$ANDROID_HOME/ndk/26.3.11579264" >> $GITHUB_ENV
+
+      - name: 6. Cài đặt Rust & Bộ biên dịch Android
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
+
+      - name: 7. Cài đặt thư viện & Tự động tạo bộ Icon nếu chưa có
+        run: |
+          npm install
+          cargo install tauri-cli --version "^2.0.0" --locked
+          if [ ! -f "src-tauri/icons/32x32.png" ]; then
+            sudo apt-get update && sudo apt-get install -y imagemagick
+            convert -size 1024x1024 xc:#1e1e2e -fill "#89b4fa" -gravity center -pointsize 520 -annotate 0 "W" app-icon.png
+            npx tauri icon app-icon.png
+          fi
+
+      - name: 8. Khởi tạo khung Android & Biên dịch APK
+        run: |
+          if [ ! -d "src-tauri/gen/android" ]; then
+            cargo tauri android init
+          fi
+          cargo tauri android build --apk true
+
+      - name: 9. Ký số (Sign APK) để cài đặt trực tiếp lên điện thoại
+        run: |
+          UNSIGNED_APK=$(find src-tauri/gen/android/app/build/outputs/apk -name "*-unsigned.apk" | head -n 1)
+          if [ -n "$UNSIGNED_APK" ]; then
+            keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=W Edit,O=OpenSource,C=VN"
+            $ANDROID_HOME/build-tools/34.0.0/apksigner sign --ks debug.keystore --ks-pass pass:android --key-pass pass:android --out W-edit-v0.1.apk "$UNSIGNED_APK"
+          else
+            SIGNED_APK=$(find src-tauri/gen/android/app/build/outputs/apk -name "*.apk" | head -n 1)
+            cp "$SIGNED_APK" W-edit-v0.1.apk
+          fi
+
+      - name: 10. Xuất file W-edit-v0.1.apk
+        uses: actions/upload-artifact@v4
+        with:
+          name: W-edit-v0.1-APK
+          path: W-edit-v0.1.apk
